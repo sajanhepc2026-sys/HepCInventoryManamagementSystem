@@ -349,7 +349,7 @@ export default function App() {
   }
 
   return (
-    <div className="relative flex h-screen w-full flex-col overflow-hidden bg-slate-50 text-slate-900 md:flex-row">
+    <div className="app-shell relative flex w-full min-w-0 flex-col overflow-hidden bg-slate-50 text-slate-900 md:flex-row">
       {/* Mobile top bar */}
       <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:hidden">
         <div className="flex items-center gap-2">
@@ -393,7 +393,7 @@ export default function App() {
         <SidebarNav activeTab={activeTab} setActiveTab={setActiveTab} saving={saving} connectionError={connectionError} />
       </aside>
 
-      <main className="flex-1 overflow-y-auto">
+      <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
         <div className="mx-auto max-w-6xl p-3 sm:p-6">
           {connectionError && (
             <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">

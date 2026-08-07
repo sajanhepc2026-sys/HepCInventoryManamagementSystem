@@ -330,7 +330,7 @@ function App() {
       " Loading inventory system..."
     ] });
   }
-  return /* @__PURE__ */ jsxs("div", { className: "relative flex h-screen w-full flex-col overflow-hidden bg-slate-50 text-slate-900 md:flex-row", children: [
+  return /* @__PURE__ */ jsxs("div", { className: "app-shell relative flex w-full min-w-0 flex-col overflow-hidden bg-slate-50 text-slate-900 md:flex-row", children: [
     /* @__PURE__ */ jsxs("div", { className: "flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:hidden", children: [
       /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-2", children: [
         /* @__PURE__ */ jsx("div", { className: "flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900 text-white", children: /* @__PURE__ */ jsx(Boxes, { size: 16 }) }),
@@ -358,7 +358,7 @@ function App() {
       ] }),
       /* @__PURE__ */ jsx(SidebarNav, { activeTab, setActiveTab, saving, connectionError })
     ] }),
-    /* @__PURE__ */ jsx("main", { className: "flex-1 overflow-y-auto", children: /* @__PURE__ */ jsxs("div", { className: "mx-auto max-w-6xl p-3 sm:p-6", children: [
+    /* @__PURE__ */ jsx("main", { className: "min-w-0 flex-1 overflow-y-auto overflow-x-hidden", children: /* @__PURE__ */ jsxs("div", { className: "mx-auto max-w-6xl p-3 sm:p-6", children: [
       connectionError && /* @__PURE__ */ jsxs("div", { className: "mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800", children: [
         /* @__PURE__ */ jsx(AlertTriangle, { size: 16, className: "mt-0.5 shrink-0" }),
         /* @__PURE__ */ jsx("span", { children: connectionError })
