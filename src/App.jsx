@@ -83,6 +83,11 @@ const DEFAULT_DATA = {
   designations: ["Medical Officer", "Lab Technician", "Data Encoder", "Program Coordinator", "IT Support"],
   departments: ["Hepatitis Clinic", "Laboratory", "IT", "Administration", "Pharmacy"],
   sources: ["DHO Office G9", "Program HQ Islamabad", "PITB"],
+  handoverOfficers: [
+    { id: "off-1", name: "Asim Rauf", designation: "IT Manager" },
+    { id: "off-2", name: "Wajahat Ahmed", designation: "IT Data Officer" },
+    { id: "off-3", name: "Naveed Sheikh", designation: "IT Data Officer" },
+  ],
   items: [],
   stockLevels: [],
   transactions: [],
@@ -1143,7 +1148,14 @@ function TabletsTab({ data, update }) {
   const [expanded, setExpanded] = useState(null);
   const [importSummary, setImportSummary] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [selectedForHandover, setSelectedForHandover] = useState(new Set());
   const fileInputRef = useRef(null);
+
+  const toggleSelectForHandover = (id) => setSelectedForHandover((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const hospitalName = (id) => data.hospitals.find((h) => h.id === id)?.name || "-";
   const staffName = (id) => data.staff.find((s) => s.id === id)?.name || "-";
@@ -1441,6 +1453,20 @@ function TabletsTab({ data, update }) {
         </div>
       )}
 
+      {view === "devices" && selectedForHandover.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-900 bg-slate-50 px-3 py-2.5">
+          <p className="text-sm font-medium text-slate-800">{selectedForHandover.size} device{selectedForHandover.size === 1 ? "" : "s"} selected for handover</p>
+          <div className="flex gap-2">
+            <Btn className="py-1.5 px-2.5 text-xs" onClick={() => {
+              const inStockIds = filtered.filter((t) => t.status === "In Stock").map((t) => t.id);
+              setSelectedForHandover(new Set(inStockIds));
+            }}>Select all in stock</Btn>
+            <Btn className="py-1.5 px-2.5 text-xs" onClick={() => setSelectedForHandover(new Set())}>Clear selection</Btn>
+            <Btn variant="primary" className="py-1.5 px-2.5 text-xs" onClick={() => setShowLetterModal(true)}><FileText size={13} /> Generate handover letter</Btn>
+          </div>
+        </div>
+      )}
+
       {view === "devices" ? (
         data.tablets.length === 0 ? (
           <EmptyState icon={TabletIcon} title="No devices registered" subtitle="Use 'Takeover device' to record a device received from DHO office or another source." />
@@ -1450,16 +1476,28 @@ function TabletsTab({ data, update }) {
               <thead className="bg-slate-50 text-left text-xs uppercase text-slate-400">
                 <tr>
                   <th className="w-6 py-2.5 pl-4"></th>
+                  <th className="w-6"></th>
                   <th>Serial number</th><th>Status</th><th>Current location</th><th>Assigned staff</th><th>NADRA app</th><th>Battery</th><th className="text-right pr-4">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((t) => {
                   const isOpen = expanded === t.id;
+                  const eligibleForHandover = t.status === "In Stock";
                   return (
                     <Fragment key={t.id}>
                       <tr className="border-t border-slate-100 hover:bg-slate-50">
                         <td className="pl-4">
+                          {eligibleForHandover && (
+                            <input
+                              type="checkbox"
+                              checked={selectedForHandover.has(t.id)}
+                              onChange={() => toggleSelectForHandover(t.id)}
+                              title="Select for handover"
+                            />
+                          )}
+                        </td>
+                        <td>
                           <button onClick={() => setExpanded(isOpen ? null : t.id)} className="text-slate-400 hover:text-slate-700">
                             <ChevronDown size={15} className={cx("transition-transform", isOpen && "rotate-180")} />
                           </button>
@@ -1484,7 +1522,7 @@ function TabletsTab({ data, update }) {
                       </tr>
                       {isOpen && (
                         <tr className="bg-slate-50/70 border-t border-slate-100">
-                          <td colSpan={8} className="px-4 py-3">
+                          <td colSpan={9} className="px-4 py-3">
                             {t.customFields && Object.keys(t.customFields).length > 0 && (
                               <div className="mb-3">
                                 <p className="mb-1.5 text-xs font-semibold uppercase text-slate-400">Additional imported fields</p>
@@ -1568,13 +1606,15 @@ function TabletsTab({ data, update }) {
       {takeoverHospitalTablet && <TakeoverHospitalModal tablet={takeoverHospitalTablet} onSave={takeoverFromHospital} onClose={() => setTakeoverHospitalTablet(null)} />}
       {showLetterModal && (
         <HandoverLetterModal
-          tablets={data.tablets} hospitals={data.hospitals} staff={data.staff}
-          onConfirm={handoverViaLetter} onClose={() => setShowLetterModal(false)}
+          tablets={data.tablets} hospitals={data.hospitals} staff={data.staff} handoverOfficers={data.handoverOfficers}
+          initialDeviceIds={Array.from(selectedForHandover)}
+          onConfirm={(letter) => { handoverViaLetter(letter); setSelectedForHandover(new Set()); }}
+          onClose={() => setShowLetterModal(false)}
         />
       )}
       {showReplacementModal && (
         <ReplacementLetterModal
-          tablets={data.tablets} hospitals={data.hospitals} staff={data.staff}
+          tablets={data.tablets} hospitals={data.hospitals} staff={data.staff} handoverOfficers={data.handoverOfficers}
           onConfirm={replaceViaLetter} onClose={() => setShowReplacementModal(false)}
         />
       )}
@@ -1946,19 +1986,23 @@ function downloadLetterWord(html, filename) {
   downloadFile(wordHtml, filename, "application/msword");
 }
 
-function HandoverLetterModal({ tablets, hospitals, staff, onConfirm, onClose }) {
+function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [], initialDeviceIds = [], onConfirm, onClose }) {
   const [step, setStep] = useState("form"); // 'form' | 'preview'
   const [refNo, setRefNo] = useState("");
   const [letterDate, setLetterDate] = useState(todayISO());
   const [hospitalId, setHospitalId] = useState(hospitals[0]?.id || "");
-  const [handingOverName, setHandingOverName] = useState("");
-  const [handingOverDesignation, setHandingOverDesignation] = useState("");
+  const [handingOverOfficerId, setHandingOverOfficerId] = useState("");
+  const [manualOfficerName, setManualOfficerName] = useState("");
+  const [manualOfficerDesignation, setManualOfficerDesignation] = useState("");
   const [takenOverStaffId, setTakenOverStaffId] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualDesignation, setManualDesignation] = useState("");
   const [manualContact, setManualContact] = useState("");
   const [focalPerson, setFocalPerson] = useState("");
-  const [rows, setRows] = useState([]); // [{tabletId, counter, date, status}]
+  const [rows, setRows] = useState(() => tablets
+    .filter((t) => initialDeviceIds.includes(t.id) && t.status === "In Stock")
+    .map((t) => ({ tabletId: t.id, counter: "", date: todayISO(), status: "Working" }))
+  );
   const [deviceSearch, setDeviceSearch] = useState("");
 
   const availableTablets = tablets.filter((t) => t.status === "In Stock");
@@ -1967,6 +2011,10 @@ function HandoverLetterModal({ tablets, hospitals, staff, onConfirm, onClose }) 
   );
   const eligibleStaff = staff.filter((s) => s.hospitalId === hospitalId);
   const hospital = hospitals.find((h) => h.id === hospitalId);
+  const isOfficerManual = handingOverOfficerId === "__manual__";
+  const selectedOfficer = handoverOfficers.find((o) => o.id === handingOverOfficerId);
+  const handingOverName = isOfficerManual ? manualOfficerName : (selectedOfficer?.name || "");
+  const handingOverDesignation = isOfficerManual ? manualOfficerDesignation : (selectedOfficer?.designation || "");
   const isManual = takenOverStaffId === "__manual__";
   const selectedStaff = eligibleStaff.find((s) => s.id === takenOverStaffId);
   const takenOverName = isManual ? manualName : (selectedStaff?.name || "");
@@ -2028,10 +2076,19 @@ function HandoverLetterModal({ tablets, hospitals, staff, onConfirm, onClose }) 
 
           <div className="rounded-md border border-slate-200 p-3">
             <p className="mb-2 text-xs font-semibold uppercase text-slate-400">Handed over by</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Name" required><TextInput value={handingOverName} onChange={(e) => setHandingOverName(e.target.value)} placeholder="e.g. Wajahat Ahmed" /></Field>
-              <Field label="Designation"><TextInput value={handingOverDesignation} onChange={(e) => setHandingOverDesignation(e.target.value)} placeholder="e.g. IT / Data Officer" /></Field>
-            </div>
+            <Field label="Officer" required>
+              <Select value={handingOverOfficerId} onChange={(e) => setHandingOverOfficerId(e.target.value)}>
+                <option value="">Select handing-over officer...</option>
+                {handoverOfficers.map((o) => <option key={o.id} value={o.id}>{o.name} - {o.designation}</option>)}
+                <option value="__manual__">Enter manually...</option>
+              </Select>
+            </Field>
+            {isOfficerManual && (
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Field label="Name" required><TextInput value={manualOfficerName} onChange={(e) => setManualOfficerName(e.target.value)} placeholder="e.g. Wajahat Ahmed" /></Field>
+                <Field label="Designation"><TextInput value={manualOfficerDesignation} onChange={(e) => setManualOfficerDesignation(e.target.value)} placeholder="e.g. IT / Data Officer" /></Field>
+              </div>
+            )}
           </div>
 
           <div className="rounded-md border border-slate-200 p-3">
@@ -2307,13 +2364,14 @@ function buildReplacementLetterHTML({ refNo, letterDate, hospitalName, hospitalL
 </html>`;
 }
 
-function ReplacementLetterModal({ tablets, hospitals, staff, onConfirm, onClose }) {
+function ReplacementLetterModal({ tablets, hospitals, staff, handoverOfficers = [], onConfirm, onClose }) {
   const [step, setStep] = useState("form"); // 'form' | 'preview'
   const [refNo, setRefNo] = useState("");
   const [letterDate, setLetterDate] = useState(todayISO());
   const [hospitalId, setHospitalId] = useState(hospitals[0]?.id || "");
-  const [handingOverName, setHandingOverName] = useState("");
-  const [handingOverDesignation, setHandingOverDesignation] = useState("");
+  const [handingOverOfficerId, setHandingOverOfficerId] = useState("");
+  const [manualOfficerName, setManualOfficerName] = useState("");
+  const [manualOfficerDesignation, setManualOfficerDesignation] = useState("");
   const [takenOverStaffId, setTakenOverStaffId] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualDesignation, setManualDesignation] = useState("");
@@ -2328,6 +2386,10 @@ function ReplacementLetterModal({ tablets, hospitals, staff, onConfirm, onClose 
   const availableTablets = tablets.filter((t) => t.status === "In Stock");
   const eligibleStaff = staff.filter((s) => s.hospitalId === hospitalId);
   const hospital = hospitals.find((h) => h.id === hospitalId);
+  const isOfficerManual = handingOverOfficerId === "__manual__";
+  const selectedOfficer = handoverOfficers.find((o) => o.id === handingOverOfficerId);
+  const handingOverName = isOfficerManual ? manualOfficerName : (selectedOfficer?.name || "");
+  const handingOverDesignation = isOfficerManual ? manualOfficerDesignation : (selectedOfficer?.designation || "");
   const isManual = takenOverStaffId === "__manual__";
   const selectedStaff = eligibleStaff.find((s) => s.id === takenOverStaffId);
   const takenOverName = isManual ? manualName : (selectedStaff?.name || "");
@@ -2380,10 +2442,19 @@ function ReplacementLetterModal({ tablets, hospitals, staff, onConfirm, onClose 
 
           <div className="rounded-md border border-slate-200 p-3">
             <p className="mb-2 text-xs font-semibold uppercase text-slate-400">Handed over by</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Name" required><TextInput value={handingOverName} onChange={(e) => setHandingOverName(e.target.value)} placeholder="e.g. Wajahat Ahmed" /></Field>
-              <Field label="Designation"><TextInput value={handingOverDesignation} onChange={(e) => setHandingOverDesignation(e.target.value)} placeholder="e.g. IT / Data Officer" /></Field>
-            </div>
+            <Field label="Officer" required>
+              <Select value={handingOverOfficerId} onChange={(e) => setHandingOverOfficerId(e.target.value)}>
+                <option value="">Select handing-over officer...</option>
+                {handoverOfficers.map((o) => <option key={o.id} value={o.id}>{o.name} - {o.designation}</option>)}
+                <option value="__manual__">Enter manually...</option>
+              </Select>
+            </Field>
+            {isOfficerManual && (
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Field label="Name" required><TextInput value={manualOfficerName} onChange={(e) => setManualOfficerName(e.target.value)} placeholder="e.g. Wajahat Ahmed" /></Field>
+                <Field label="Designation"><TextInput value={manualOfficerDesignation} onChange={(e) => setManualOfficerDesignation(e.target.value)} placeholder="e.g. IT / Data Officer" /></Field>
+              </div>
+            )}
           </div>
 
           <div className="rounded-md border border-slate-200 p-3">
@@ -2702,6 +2773,7 @@ function SettingsTab({ data, update }) {
   const setDesignations = (designations) => update((prev) => ({ ...prev, designations }));
   const setDepartments = (departments) => update((prev) => ({ ...prev, departments }));
   const setSources = (sources) => update((prev) => ({ ...prev, sources }));
+  const setHandoverOfficers = (handoverOfficers) => update((prev) => ({ ...prev, handoverOfficers }));
 
   return (
     <div>
@@ -2760,6 +2832,29 @@ function SettingsTab({ data, update }) {
           onAdd={(v) => setSources([v, ...data.sources])}
           onEdit={(id, v) => setSources(data.sources.map((s) => (s === id ? v : s)))}
           onDelete={(id) => setSources(data.sources.filter((s) => s !== id))}
+        />
+
+        <ConfigList
+          label="Handing-over officers"
+          items={data.handoverOfficers}
+          extraFields={{
+            initial: { name: "", designation: "" },
+            valid: (d) => d.name.trim(),
+            display: (o) => `${o.name}${o.designation ? ` (${o.designation})` : ""}`,
+            render: (d, setD) => (
+              <div className="flex flex-1 gap-2">
+                <TextInput placeholder="Name" value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} />
+                <TextInput placeholder="Designation" value={d.designation} onChange={(e) => setD({ ...d, designation: e.target.value })} />
+              </div>
+            ),
+          }}
+          onAdd={(d) => {
+            const id = uid("off");
+            setHandoverOfficers([{ id, ...d }, ...data.handoverOfficers]);
+            return id;
+          }}
+          onEdit={(id, d) => setHandoverOfficers(data.handoverOfficers.map((o) => (o.id === id ? { ...o, ...d } : o)))}
+          onDelete={(id) => setHandoverOfficers(data.handoverOfficers.filter((o) => o.id !== id))}
         />
       </div>
       <p className="mt-4 text-xs text-slate-400">
