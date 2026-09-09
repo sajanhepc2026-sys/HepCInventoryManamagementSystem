@@ -114,6 +114,11 @@ var DEFAULT_DATA = {
   designations: ["Medical Officer", "Lab Technician", "Data Encoder", "Program Coordinator", "IT Support"],
   departments: ["Hepatitis Clinic", "Laboratory", "IT", "Administration", "Pharmacy"],
   sources: ["DHO Office G9", "Program HQ Islamabad", "PITB"],
+  handoverOfficers: [
+    { id: "off-1", name: "Asim Rauf", designation: "IT Manager" },
+    { id: "off-2", name: "Wajahat Ahmed", designation: "IT Data Officer" },
+    { id: "off-3", name: "Naveed Sheikh", designation: "IT Data Officer" }
+  ],
   items: [],
   stockLevels: [],
   transactions: [],
@@ -949,7 +954,14 @@ function TabletsTab({ data, update }) {
   const [expanded, setExpanded] = useState(null);
   const [importSummary, setImportSummary] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [selectedForHandover, setSelectedForHandover] = useState(/* @__PURE__ */ new Set());
   const fileInputRef = useRef(null);
+  const toggleSelectForHandover = (id) => setSelectedForHandover((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
   const hospitalName = (id) => data.hospitals.find((h) => h.id === id)?.name || "-";
   const staffName = (id) => data.staff.find((s) => s.id === id)?.name || "-";
   const filtered = data.tablets.filter((t) => !search || [t.serialNumber, t.model].join(" ").toLowerCase().includes(search.toLowerCase()));
@@ -1278,9 +1290,29 @@ function TabletsTab({ data, update }) {
       ] }),
       importSummary.warnings.length > 0 && /* @__PURE__ */ jsx("ul", { className: "mt-1.5 list-disc pl-5 text-xs text-amber-700", children: importSummary.warnings.map((w, i) => /* @__PURE__ */ jsx("li", { children: w }, i)) })
     ] }),
+    view === "devices" && selectedForHandover.size > 0 && /* @__PURE__ */ jsxs("div", { className: "mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-900 bg-slate-50 px-3 py-2.5", children: [
+      /* @__PURE__ */ jsxs("p", { className: "text-sm font-medium text-slate-800", children: [
+        selectedForHandover.size,
+        " device",
+        selectedForHandover.size === 1 ? "" : "s",
+        " selected for handover"
+      ] }),
+      /* @__PURE__ */ jsxs("div", { className: "flex gap-2", children: [
+        /* @__PURE__ */ jsx(Btn, { className: "py-1.5 px-2.5 text-xs", onClick: () => {
+          const inStockIds = filtered.filter((t) => t.status === "In Stock").map((t) => t.id);
+          setSelectedForHandover(new Set(inStockIds));
+        }, children: "Select all in stock" }),
+        /* @__PURE__ */ jsx(Btn, { className: "py-1.5 px-2.5 text-xs", onClick: () => setSelectedForHandover(/* @__PURE__ */ new Set()), children: "Clear selection" }),
+        /* @__PURE__ */ jsxs(Btn, { variant: "primary", className: "py-1.5 px-2.5 text-xs", onClick: () => setShowLetterModal(true), children: [
+          /* @__PURE__ */ jsx(FileText, { size: 13 }),
+          " Generate handover letter"
+        ] })
+      ] })
+    ] }),
     view === "devices" ? data.tablets.length === 0 ? /* @__PURE__ */ jsx(EmptyState, { icon: TabletIcon, title: "No devices registered", subtitle: "Use 'Takeover device' to record a device received from DHO office or another source." }) : /* @__PURE__ */ jsx("div", { className: "overflow-x-auto rounded-lg border border-slate-200 bg-white", children: /* @__PURE__ */ jsxs("table", { className: "w-full min-w-[720px] text-sm", children: [
       /* @__PURE__ */ jsx("thead", { className: "bg-slate-50 text-left text-xs uppercase text-slate-400", children: /* @__PURE__ */ jsxs("tr", { children: [
         /* @__PURE__ */ jsx("th", { className: "w-6 py-2.5 pl-4" }),
+        /* @__PURE__ */ jsx("th", { className: "w-6" }),
         /* @__PURE__ */ jsx("th", { children: "Serial number" }),
         /* @__PURE__ */ jsx("th", { children: "Status" }),
         /* @__PURE__ */ jsx("th", { children: "Current location" }),
@@ -1291,9 +1323,19 @@ function TabletsTab({ data, update }) {
       ] }) }),
       /* @__PURE__ */ jsx("tbody", { children: filtered.map((t) => {
         const isOpen = expanded === t.id;
+        const eligibleForHandover = t.status === "In Stock";
         return /* @__PURE__ */ jsxs(Fragment, { children: [
           /* @__PURE__ */ jsxs("tr", { className: "border-t border-slate-100 hover:bg-slate-50", children: [
-            /* @__PURE__ */ jsx("td", { className: "pl-4", children: /* @__PURE__ */ jsx("button", { onClick: () => setExpanded(isOpen ? null : t.id), className: "text-slate-400 hover:text-slate-700", children: /* @__PURE__ */ jsx(ChevronDown, { size: 15, className: cx("transition-transform", isOpen && "rotate-180") }) }) }),
+            /* @__PURE__ */ jsx("td", { className: "pl-4", children: eligibleForHandover && /* @__PURE__ */ jsx(
+              "input",
+              {
+                type: "checkbox",
+                checked: selectedForHandover.has(t.id),
+                onChange: () => toggleSelectForHandover(t.id),
+                title: "Select for handover"
+              }
+            ) }),
+            /* @__PURE__ */ jsx("td", { children: /* @__PURE__ */ jsx("button", { onClick: () => setExpanded(isOpen ? null : t.id), className: "text-slate-400 hover:text-slate-700", children: /* @__PURE__ */ jsx(ChevronDown, { size: 15, className: cx("transition-transform", isOpen && "rotate-180") }) }) }),
             /* @__PURE__ */ jsxs("td", { className: "py-2.5 font-medium text-slate-700", children: [
               t.serialNumber,
               /* @__PURE__ */ jsx("p", { className: "text-xs font-normal text-slate-400", children: t.model })
@@ -1318,7 +1360,7 @@ function TabletsTab({ data, update }) {
               /* @__PURE__ */ jsx("button", { title: "Delete device", className: "rounded p-1.5 text-slate-400 hover:bg-red-100 hover:text-red-600", onClick: () => setConfirmDeleteId(t.id), children: /* @__PURE__ */ jsx(Trash2, { size: 14 }) })
             ] }) })
           ] }),
-          isOpen && /* @__PURE__ */ jsx("tr", { className: "bg-slate-50/70 border-t border-slate-100", children: /* @__PURE__ */ jsxs("td", { colSpan: 8, className: "px-4 py-3", children: [
+          isOpen && /* @__PURE__ */ jsx("tr", { className: "bg-slate-50/70 border-t border-slate-100", children: /* @__PURE__ */ jsxs("td", { colSpan: 9, className: "px-4 py-3", children: [
             t.customFields && Object.keys(t.customFields).length > 0 && /* @__PURE__ */ jsxs("div", { className: "mb-3", children: [
               /* @__PURE__ */ jsx("p", { className: "mb-1.5 text-xs font-semibold uppercase text-slate-400", children: "Additional imported fields" }),
               /* @__PURE__ */ jsx("div", { className: "flex flex-wrap gap-1.5", children: Object.entries(t.customFields).map(([k, v]) => /* @__PURE__ */ jsxs(Badge, { tone: "slate", children: [
@@ -1393,7 +1435,12 @@ function TabletsTab({ data, update }) {
         tablets: data.tablets,
         hospitals: data.hospitals,
         staff: data.staff,
-        onConfirm: handoverViaLetter,
+        handoverOfficers: data.handoverOfficers,
+        initialDeviceIds: Array.from(selectedForHandover),
+        onConfirm: (letter) => {
+          handoverViaLetter(letter);
+          setSelectedForHandover(/* @__PURE__ */ new Set());
+        },
         onClose: () => setShowLetterModal(false)
       }
     ),
@@ -1403,6 +1450,7 @@ function TabletsTab({ data, update }) {
         tablets: data.tablets,
         hospitals: data.hospitals,
         staff: data.staff,
+        handoverOfficers: data.handoverOfficers,
         onConfirm: replaceViaLetter,
         onClose: () => setShowReplacementModal(false)
       }
@@ -1729,19 +1777,22 @@ function downloadLetterWord(html, filename) {
   const wordHtml = html.replace("<html>", '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">').replace("<head>", '<head>\n<meta name="ProgId" content="Word.Document">\n<meta name="Generator" content="Microsoft Word">');
   downloadFile(wordHtml, filename, "application/msword");
 }
-function HandoverLetterModal({ tablets, hospitals, staff, onConfirm, onClose }) {
+function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [], initialDeviceIds = [], onConfirm, onClose }) {
   const [step, setStep] = useState("form");
   const [refNo, setRefNo] = useState("");
   const [letterDate, setLetterDate] = useState(todayISO());
   const [hospitalId, setHospitalId] = useState(hospitals[0]?.id || "");
-  const [handingOverName, setHandingOverName] = useState("");
-  const [handingOverDesignation, setHandingOverDesignation] = useState("");
+  const [handingOverOfficerId, setHandingOverOfficerId] = useState("");
+  const [manualOfficerName, setManualOfficerName] = useState("");
+  const [manualOfficerDesignation, setManualOfficerDesignation] = useState("");
   const [takenOverStaffId, setTakenOverStaffId] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualDesignation, setManualDesignation] = useState("");
   const [manualContact, setManualContact] = useState("");
   const [focalPerson, setFocalPerson] = useState("");
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] = useState(
+    () => tablets.filter((t) => initialDeviceIds.includes(t.id) && t.status === "In Stock").map((t) => ({ tabletId: t.id, counter: "", date: todayISO(), status: "Working" }))
+  );
   const [deviceSearch, setDeviceSearch] = useState("");
   const availableTablets = tablets.filter((t) => t.status === "In Stock");
   const filteredAvailableTablets = availableTablets.filter(
@@ -1749,6 +1800,10 @@ function HandoverLetterModal({ tablets, hospitals, staff, onConfirm, onClose }) 
   );
   const eligibleStaff = staff.filter((s) => s.hospitalId === hospitalId);
   const hospital = hospitals.find((h) => h.id === hospitalId);
+  const isOfficerManual = handingOverOfficerId === "__manual__";
+  const selectedOfficer = handoverOfficers.find((o) => o.id === handingOverOfficerId);
+  const handingOverName = isOfficerManual ? manualOfficerName : selectedOfficer?.name || "";
+  const handingOverDesignation = isOfficerManual ? manualOfficerDesignation : selectedOfficer?.designation || "";
   const isManual = takenOverStaffId === "__manual__";
   const selectedStaff = eligibleStaff.find((s) => s.id === takenOverStaffId);
   const takenOverName = isManual ? manualName : selectedStaff?.name || "";
@@ -1806,9 +1861,18 @@ function HandoverLetterModal({ tablets, hospitals, staff, onConfirm, onClose }) 
       ] }),
       /* @__PURE__ */ jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [
         /* @__PURE__ */ jsx("p", { className: "mb-2 text-xs font-semibold uppercase text-slate-400", children: "Handed over by" }),
-        /* @__PURE__ */ jsxs("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-3", children: [
-          /* @__PURE__ */ jsx(Field, { label: "Name", required: true, children: /* @__PURE__ */ jsx(TextInput, { value: handingOverName, onChange: (e) => setHandingOverName(e.target.value), placeholder: "e.g. Wajahat Ahmed" }) }),
-          /* @__PURE__ */ jsx(Field, { label: "Designation", children: /* @__PURE__ */ jsx(TextInput, { value: handingOverDesignation, onChange: (e) => setHandingOverDesignation(e.target.value), placeholder: "e.g. IT / Data Officer" }) })
+        /* @__PURE__ */ jsx(Field, { label: "Officer", required: true, children: /* @__PURE__ */ jsxs(Select, { value: handingOverOfficerId, onChange: (e) => setHandingOverOfficerId(e.target.value), children: [
+          /* @__PURE__ */ jsx("option", { value: "", children: "Select handing-over officer..." }),
+          handoverOfficers.map((o) => /* @__PURE__ */ jsxs("option", { value: o.id, children: [
+            o.name,
+            " - ",
+            o.designation
+          ] }, o.id)),
+          /* @__PURE__ */ jsx("option", { value: "__manual__", children: "Enter manually..." })
+        ] }) }),
+        isOfficerManual && /* @__PURE__ */ jsxs("div", { className: "mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3", children: [
+          /* @__PURE__ */ jsx(Field, { label: "Name", required: true, children: /* @__PURE__ */ jsx(TextInput, { value: manualOfficerName, onChange: (e) => setManualOfficerName(e.target.value), placeholder: "e.g. Wajahat Ahmed" }) }),
+          /* @__PURE__ */ jsx(Field, { label: "Designation", children: /* @__PURE__ */ jsx(TextInput, { value: manualOfficerDesignation, onChange: (e) => setManualOfficerDesignation(e.target.value), placeholder: "e.g. IT / Data Officer" }) })
         ] })
       ] }),
       /* @__PURE__ */ jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [
@@ -2123,13 +2187,14 @@ function buildReplacementLetterHTML({ refNo, letterDate, hospitalName, hospitalL
 </body>
 </html>`;
 }
-function ReplacementLetterModal({ tablets, hospitals, staff, onConfirm, onClose }) {
+function ReplacementLetterModal({ tablets, hospitals, staff, handoverOfficers = [], onConfirm, onClose }) {
   const [step, setStep] = useState("form");
   const [refNo, setRefNo] = useState("");
   const [letterDate, setLetterDate] = useState(todayISO());
   const [hospitalId, setHospitalId] = useState(hospitals[0]?.id || "");
-  const [handingOverName, setHandingOverName] = useState("");
-  const [handingOverDesignation, setHandingOverDesignation] = useState("");
+  const [handingOverOfficerId, setHandingOverOfficerId] = useState("");
+  const [manualOfficerName, setManualOfficerName] = useState("");
+  const [manualOfficerDesignation, setManualOfficerDesignation] = useState("");
   const [takenOverStaffId, setTakenOverStaffId] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualDesignation, setManualDesignation] = useState("");
@@ -2143,6 +2208,10 @@ function ReplacementLetterModal({ tablets, hospitals, staff, onConfirm, onClose 
   const availableTablets = tablets.filter((t) => t.status === "In Stock");
   const eligibleStaff = staff.filter((s) => s.hospitalId === hospitalId);
   const hospital = hospitals.find((h) => h.id === hospitalId);
+  const isOfficerManual = handingOverOfficerId === "__manual__";
+  const selectedOfficer = handoverOfficers.find((o) => o.id === handingOverOfficerId);
+  const handingOverName = isOfficerManual ? manualOfficerName : selectedOfficer?.name || "";
+  const handingOverDesignation = isOfficerManual ? manualOfficerDesignation : selectedOfficer?.designation || "";
   const isManual = takenOverStaffId === "__manual__";
   const selectedStaff = eligibleStaff.find((s) => s.id === takenOverStaffId);
   const takenOverName = isManual ? manualName : selectedStaff?.name || "";
@@ -2193,9 +2262,18 @@ function ReplacementLetterModal({ tablets, hospitals, staff, onConfirm, onClose 
       ] }),
       /* @__PURE__ */ jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [
         /* @__PURE__ */ jsx("p", { className: "mb-2 text-xs font-semibold uppercase text-slate-400", children: "Handed over by" }),
-        /* @__PURE__ */ jsxs("div", { className: "grid grid-cols-1 sm:grid-cols-2 gap-3", children: [
-          /* @__PURE__ */ jsx(Field, { label: "Name", required: true, children: /* @__PURE__ */ jsx(TextInput, { value: handingOverName, onChange: (e) => setHandingOverName(e.target.value), placeholder: "e.g. Wajahat Ahmed" }) }),
-          /* @__PURE__ */ jsx(Field, { label: "Designation", children: /* @__PURE__ */ jsx(TextInput, { value: handingOverDesignation, onChange: (e) => setHandingOverDesignation(e.target.value), placeholder: "e.g. IT / Data Officer" }) })
+        /* @__PURE__ */ jsx(Field, { label: "Officer", required: true, children: /* @__PURE__ */ jsxs(Select, { value: handingOverOfficerId, onChange: (e) => setHandingOverOfficerId(e.target.value), children: [
+          /* @__PURE__ */ jsx("option", { value: "", children: "Select handing-over officer..." }),
+          handoverOfficers.map((o) => /* @__PURE__ */ jsxs("option", { value: o.id, children: [
+            o.name,
+            " - ",
+            o.designation
+          ] }, o.id)),
+          /* @__PURE__ */ jsx("option", { value: "__manual__", children: "Enter manually..." })
+        ] }) }),
+        isOfficerManual && /* @__PURE__ */ jsxs("div", { className: "mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3", children: [
+          /* @__PURE__ */ jsx(Field, { label: "Name", required: true, children: /* @__PURE__ */ jsx(TextInput, { value: manualOfficerName, onChange: (e) => setManualOfficerName(e.target.value), placeholder: "e.g. Wajahat Ahmed" }) }),
+          /* @__PURE__ */ jsx(Field, { label: "Designation", children: /* @__PURE__ */ jsx(TextInput, { value: manualOfficerDesignation, onChange: (e) => setManualOfficerDesignation(e.target.value), placeholder: "e.g. IT / Data Officer" }) })
         ] })
       ] }),
       /* @__PURE__ */ jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [
@@ -2520,6 +2598,7 @@ function SettingsTab({ data, update }) {
   const setDesignations = (designations) => update((prev) => ({ ...prev, designations }));
   const setDepartments = (departments) => update((prev) => ({ ...prev, departments }));
   const setSources = (sources) => update((prev) => ({ ...prev, sources }));
+  const setHandoverOfficers = (handoverOfficers) => update((prev) => ({ ...prev, handoverOfficers }));
   return /* @__PURE__ */ jsxs("div", { children: [
     /* @__PURE__ */ jsx(Toolbar, { title: "Admin settings", subtitle: "Configure master data used across the system - no code changes required." }),
     /* @__PURE__ */ jsxs("div", { className: "grid grid-cols-1 gap-4 md:grid-cols-2", children: [
@@ -2584,6 +2663,29 @@ function SettingsTab({ data, update }) {
           onAdd: (v) => setSources([v, ...data.sources]),
           onEdit: (id, v) => setSources(data.sources.map((s) => s === id ? v : s)),
           onDelete: (id) => setSources(data.sources.filter((s) => s !== id))
+        }
+      ),
+      /* @__PURE__ */ jsx(
+        ConfigList,
+        {
+          label: "Handing-over officers",
+          items: data.handoverOfficers,
+          extraFields: {
+            initial: { name: "", designation: "" },
+            valid: (d) => d.name.trim(),
+            display: (o) => `${o.name}${o.designation ? ` (${o.designation})` : ""}`,
+            render: (d, setD) => /* @__PURE__ */ jsxs("div", { className: "flex flex-1 gap-2", children: [
+              /* @__PURE__ */ jsx(TextInput, { placeholder: "Name", value: d.name, onChange: (e) => setD({ ...d, name: e.target.value }) }),
+              /* @__PURE__ */ jsx(TextInput, { placeholder: "Designation", value: d.designation, onChange: (e) => setD({ ...d, designation: e.target.value }) })
+            ] })
+          },
+          onAdd: (d) => {
+            const id = uid("off");
+            setHandoverOfficers([{ id, ...d }, ...data.handoverOfficers]);
+            return id;
+          },
+          onEdit: (id, d) => setHandoverOfficers(data.handoverOfficers.map((o) => o.id === id ? { ...o, ...d } : o)),
+          onDelete: (id) => setHandoverOfficers(data.handoverOfficers.filter((o) => o.id !== id))
         }
       )
     ] }),
