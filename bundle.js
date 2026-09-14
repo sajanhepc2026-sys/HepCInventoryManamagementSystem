@@ -123,6 +123,7 @@ var DEFAULT_DATA = {
   stockLevels: [],
   transactions: [],
   tablets: [],
+  barcodeRolls: [],
   staff: []
 };
 var uid = (p = "id") => `${p}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1165,9 +1166,8 @@ function TabletsTab({ data, update }) {
     setTakeoverHospitalTablet(null);
   }
   function handoverViaLetter(letter) {
-    update((prev) => ({
-      ...prev,
-      tablets: prev.tablets.map((t) => {
+    update((prev) => {
+      const tablets = prev.tablets.map((t) => {
         const row = letter.rows.find((r) => r.tabletId === t.id);
         if (!row) return t;
         return {
@@ -1182,8 +1182,65 @@ function TabletsTab({ data, update }) {
             detail: `Handed over to ${hospitalName(letter.hospitalId)} / ${letter.takenOverName}${letter.takenOverDesignation ? ` (${letter.takenOverDesignation})` : ""} by ${letter.handingOverName}${letter.handingOverDesignation ? ` (${letter.handingOverDesignation})` : ""}. Counter: ${row.counter || "-"}. Status: ${row.status || "-"}.${letter.refNo ? ` Ref: ${letter.refNo}.` : ""}`
           }, ...t.history || []]
         };
-      })
-    }));
+      });
+      let barcodeRolls = [...prev.barcodeRolls];
+      (letter.barcodeRows || []).forEach((row) => {
+        const serial = (row.serialNumber || "").trim();
+        if (!serial) return;
+        const idx = barcodeRolls.findIndex((b) => b.serialNumber.trim().toLowerCase() === serial.toLowerCase());
+        const historyEntry = {
+          date: row.date,
+          type: "HANDOVER",
+          detail: `Handed over to ${hospitalName(letter.hospitalId)} / ${letter.takenOverName} by ${letter.handingOverName}. Counter: ${row.counter || "-"}. Status: ${row.status || "-"}.${letter.refNo ? ` Ref: ${letter.refNo}.` : ""}`
+        };
+        if (idx >= 0) {
+          barcodeRolls[idx] = {
+            ...barcodeRolls[idx],
+            currentHospitalId: letter.hospitalId,
+            status: "Assigned",
+            assignedStaffId: letter.takenOverStaffId || null,
+            assignedStaffName: letter.takenOverStaffId ? null : letter.takenOverName,
+            history: [historyEntry, ...barcodeRolls[idx].history || []]
+          };
+        } else {
+          barcodeRolls.push({
+            id: uid("bcr"),
+            serialNumber: serial,
+            status: "Assigned",
+            currentHospitalId: letter.hospitalId,
+            assignedStaffId: letter.takenOverStaffId || null,
+            assignedStaffName: letter.takenOverStaffId ? null : letter.takenOverName,
+            history: [historyEntry]
+          });
+        }
+      });
+      let stockLevels = [...prev.stockLevels];
+      let transactions = [...prev.transactions];
+      const applyDelta = (itemId, hospitalId, delta) => {
+        const idx = stockLevels.findIndex((s) => s.itemId === itemId && s.hospitalId === hospitalId);
+        if (idx >= 0) stockLevels[idx] = { ...stockLevels[idx], quantity: stockLevels[idx].quantity + delta };
+        else stockLevels.push({ id: uid("stk"), itemId, hospitalId, quantity: delta });
+      };
+      (letter.kitRows || []).forEach((row) => {
+        if (!row.itemId || !row.boxes) return;
+        const item = prev.items.find((i) => i.id === row.itemId);
+        const qty = Number(row.boxes);
+        if (letter.issuingWarehouseId) applyDelta(row.itemId, letter.issuingWarehouseId, -qty);
+        applyDelta(row.itemId, letter.hospitalId, qty);
+        transactions = [{
+          id: uid("txn"),
+          itemId: row.itemId,
+          itemName: item?.name || "RDT Kits",
+          type: "TRANSFER",
+          qty,
+          fromHospitalId: letter.issuingWarehouseId || null,
+          toHospitalId: letter.hospitalId,
+          date: row.date,
+          remarks: `Handed over via handover letter${letter.refNo ? ` (Ref: ${letter.refNo})` : ""} to ${letter.takenOverName}.`
+        }, ...transactions];
+      });
+      return { ...prev, tablets, barcodeRolls, stockLevels, transactions };
+    });
   }
   function replaceViaLetter(letter) {
     update((prev) => ({
@@ -1436,6 +1493,9 @@ function TabletsTab({ data, update }) {
         hospitals: data.hospitals,
         staff: data.staff,
         handoverOfficers: data.handoverOfficers,
+        items: data.items,
+        stockLevels: data.stockLevels,
+        barcodeRolls: data.barcodeRolls,
         initialDeviceIds: Array.from(selectedForHandover),
         onConfirm: (letter) => {
           handoverViaLetter(letter);
@@ -1679,14 +1739,39 @@ var formatLetterDate = (iso) => {
   const d = new Date(iso);
   return `${ordinal(d.getDate())} ${d.toLocaleString(void 0, { month: "long" })}, ${d.getFullYear()}`;
 };
-function buildLetterHTML({ refNo, letterDate, hospitalName, hospitalLocation, handingOverName, handingOverDesignation, takenOverName, takenOverDesignation, takenOverContact, focalPerson, rows, tablets }) {
-  const subjectText = `Handing-Over of ${numWord(rows.length)} (${pad2(rows.length)}) Android Tablet Device${rows.length > 1 ? "s" : ""} for Data Entry in Electronic Medical Record (EMR) System under &quot;Prime Minister Programme for the Elimination of Hepatitis C Infection&quot;.`;
-  const tableRows = rows.map((r, i) => {
+function combineHandoverRows({ rows = [], tablets = [], barcodeRows = [], kitRows = [], items = [] }) {
+  const tabletRows = rows.map((r) => {
     const t = tablets.find((x) => x.id === r.tabletId);
+    return { description: "IVAS Tablet", serial: t?.serialNumber || "", counter: r.counter, date: r.date, status: r.status };
+  });
+  const bRows = barcodeRows.map((r) => ({ description: "Barcode Roll", serial: r.serialNumber, counter: r.counter, date: r.date, status: r.status }));
+  const kRows = kitRows.map((r) => {
+    const item = items.find((i) => i.id === r.itemId);
+    const boxes = Number(r.boxes) || 0;
+    return {
+      description: `${item?.name || "RDT Kits"} (Box)`,
+      serial: `${boxes} box${boxes === 1 ? "" : "es"} (${boxes * 30} kits)`,
+      counter: r.counter,
+      date: r.date,
+      status: r.status
+    };
+  });
+  return [...tabletRows, ...bRows, ...kRows];
+}
+function buildLetterHTML({ refNo, letterDate, hospitalName, hospitalLocation, handingOverName, handingOverDesignation, takenOverName, takenOverDesignation, takenOverContact, focalPerson, rows, tablets, barcodeRows = [], kitRows = [], items = [] }) {
+  const combined = combineHandoverRows({ rows, tablets, barcodeRows, kitRows, items });
+  const includedTypeLabels = [
+    rows.length > 0 && "Android Tablet Device(s)",
+    barcodeRows.length > 0 && "Barcode Roll(s)",
+    kitRows.length > 0 && "RDT Kit Box(es)"
+  ].filter(Boolean);
+  const typesText = includedTypeLabels.length <= 1 ? includedTypeLabels[0] || "Item(s)" : includedTypeLabels.slice(0, -1).join(", ") + " and " + includedTypeLabels[includedTypeLabels.length - 1];
+  const subjectText = `Handing-Over of ${numWord(combined.length)} (${pad2(combined.length)}) ${typesText} for Data Entry / Screening under &quot;Prime Minister Programme for the Elimination of Hepatitis C Infection&quot;.`;
+  const tableRows = combined.map((r, i) => {
     return `<tr>
       <td style="border:1px solid #1e293b;padding:6px;text-align:center;">${i + 1}.</td>
-      <td style="border:1px solid #1e293b;padding:6px;">IVAS Tablet</td>
-      <td style="border:1px solid #1e293b;padding:6px;">${t?.serialNumber || ""}</td>
+      <td style="border:1px solid #1e293b;padding:6px;">${r.description}</td>
+      <td style="border:1px solid #1e293b;padding:6px;">${r.serial || ""}</td>
       <td style="border:1px solid #1e293b;padding:6px;">${r.counter || ""}</td>
       <td style="border:1px solid #1e293b;padding:6px;text-align:center;">${fmtDate(r.date)}</td>
       <td style="border:1px solid #1e293b;padding:6px;">${r.status || ""}</td>
@@ -1722,7 +1807,7 @@ function buildLetterHTML({ refNo, letterDate, hospitalName, hospitalLocation, ha
     <p>Islamabad, the ${formatLetterDate(letterDate)}</p>
   </div>
   <p><span class="bold underline">Subject:</span> <span class="bold underline">${subjectText}</span></p>
-  <p>I, <b>${handingOverName}</b>${handingOverDesignation ? `, Designation <b>${handingOverDesignation}</b>` : ""} (Hep-C Elimination Program) is hereby handing over ${numWord(rows.length)} (${pad2(rows.length)}) Android Tablet Device${rows.length > 1 ? "s" : ""} to <b>${takenOverName}</b> with following details: -</p>
+  <p>I, <b>${handingOverName}</b>${handingOverDesignation ? `, Designation <b>${handingOverDesignation}</b>` : ""} (Hep-C Elimination Program) is hereby handing over ${numWord(combined.length)} (${pad2(combined.length)}) ${typesText} to <b>${takenOverName}</b> with following details: -</p>
   <table>
     <thead><tr style="background:#f8fafc;">
       <th style="border:1px solid #1e293b;padding:6px;">S.#</th>
@@ -1734,7 +1819,7 @@ function buildLetterHTML({ refNo, letterDate, hospitalName, hospitalLocation, ha
     </tr></thead>
     <tbody>${tableRows}</tbody>
   </table>
-  <p style="margin-top:12px;">The tablet device shall be utilized exclusively for data entry of citizens/individuals related to Hepatitis C screening, testing, and treatment${focalPerson ? ` under the supervision of focal person <b>${focalPerson}</b>` : ""} from ${hospitalName}.</p>
+  <p style="margin-top:12px;">The above item(s) shall be utilized exclusively for data entry, screening and related activities under the Hepatitis C Elimination Program${focalPerson ? ` under the supervision of focal person <b>${focalPerson}</b>` : ""} from ${hospitalName}.</p>
   <div class="sig-grid">
     <div>
       <p class="bold">HANDED OVER BY</p>
@@ -1777,7 +1862,7 @@ function downloadLetterWord(html, filename) {
   const wordHtml = html.replace("<html>", '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">').replace("<head>", '<head>\n<meta name="ProgId" content="Word.Document">\n<meta name="Generator" content="Microsoft Word">');
   downloadFile(wordHtml, filename, "application/msword");
 }
-function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [], initialDeviceIds = [], onConfirm, onClose }) {
+function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [], initialDeviceIds = [], items = [], stockLevels = [], barcodeRolls = [], onConfirm, onClose }) {
   const [step, setStep] = useState("form");
   const [refNo, setRefNo] = useState("");
   const [letterDate, setLetterDate] = useState(todayISO());
@@ -1794,6 +1879,9 @@ function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [],
     () => tablets.filter((t) => initialDeviceIds.includes(t.id) && t.status === "In Stock").map((t) => ({ tabletId: t.id, counter: "", date: todayISO(), status: "Working" }))
   );
   const [deviceSearch, setDeviceSearch] = useState("");
+  const [barcodeRows, setBarcodeRows] = useState([]);
+  const [kitRows, setKitRows] = useState([]);
+  const [issuingWarehouseId, setIssuingWarehouseId] = useState(hospitals[0]?.id || "");
   const availableTablets = tablets.filter((t) => t.status === "In Stock");
   const filteredAvailableTablets = availableTablets.filter(
     (t) => !deviceSearch || [t.serialNumber, t.model].join(" ").toLowerCase().includes(deviceSearch.toLowerCase())
@@ -1809,6 +1897,9 @@ function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [],
   const takenOverName = isManual ? manualName : selectedStaff?.name || "";
   const takenOverDesignation = isManual ? manualDesignation : selectedStaff?.designation || "";
   const takenOverContact = isManual ? manualContact : "";
+  const rdtKitItems = items.filter((i) => (i.name || "").toLowerCase().includes("rdt"));
+  const kitItemOptions = rdtKitItems.length > 0 ? rdtKitItems : items;
+  const stockAt = (itemId, whId) => stockLevels.find((s) => s.itemId === itemId && s.hospitalId === whId)?.quantity || 0;
   const toggleDevice = (t) => setRows(
     (prev) => prev.some((r) => r.tabletId === t.id) ? prev.filter((r) => r.tabletId !== t.id) : [...prev, { tabletId: t.id, counter: "", date: letterDate, status: "Working" }]
   );
@@ -1822,8 +1913,21 @@ function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [],
     const filteredIds = new Set(filteredAvailableTablets.map((t) => t.id));
     return prev.filter((r) => !filteredIds.has(r.tabletId));
   });
-  const canPreview = hospitalId && handingOverName.trim() && takenOverName.trim() && rows.length > 0;
-  const subjectText = `Handing-Over of ${numWord(rows.length)} (${pad2(rows.length)}) Android Tablet Device${rows.length > 1 ? "s" : ""} for Data Entry in Electronic Medical Record (EMR) System under "Prime Minister Programme for the Elimination of Hepatitis C Infection".`;
+  const addBarcodeRow = () => setBarcodeRows((prev) => [...prev, { serialNumber: "", counter: "", date: letterDate, status: "Working" }]);
+  const updateBarcodeRow = (idx, patch) => setBarcodeRows((prev) => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+  const removeBarcodeRow = (idx) => setBarcodeRows((prev) => prev.filter((_, i) => i !== idx));
+  const addKitRow = () => setKitRows((prev) => [...prev, { itemId: kitItemOptions[0]?.id || "", boxes: 1, counter: "", date: letterDate, status: "Working" }]);
+  const updateKitRow = (idx, patch) => setKitRows((prev) => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+  const removeKitRow = (idx) => setKitRows((prev) => prev.filter((_, i) => i !== idx));
+  const totalHandoverCount = rows.length + barcodeRows.filter((r) => r.serialNumber.trim()).length + kitRows.filter((r) => r.itemId && r.boxes > 0).length;
+  const canPreview = hospitalId && handingOverName.trim() && takenOverName.trim() && totalHandoverCount > 0;
+  const includedTypeLabels = [
+    rows.length > 0 && "Android Tablet Device(s)",
+    barcodeRows.filter((r) => r.serialNumber.trim()).length > 0 && "Barcode Roll(s)",
+    kitRows.filter((r) => r.itemId && r.boxes > 0).length > 0 && "RDT Kit Box(es)"
+  ].filter(Boolean);
+  const typesText = includedTypeLabels.length <= 1 ? includedTypeLabels[0] || "Item(s)" : includedTypeLabels.slice(0, -1).join(", ") + " and " + includedTypeLabels[includedTypeLabels.length - 1];
+  const subjectText = `Handing-Over of ${numWord(totalHandoverCount)} (${pad2(totalHandoverCount)}) ${typesText} for Data Entry / Screening under "Prime Minister Programme for the Elimination of Hepatitis C Infection".`;
   function handleConfirm() {
     onConfirm({
       refNo,
@@ -1836,7 +1940,10 @@ function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [],
       takenOverDesignation,
       takenOverContact,
       focalPerson,
-      rows
+      rows,
+      barcodeRows: barcodeRows.filter((r) => r.serialNumber.trim()),
+      kitRows: kitRows.filter((r) => r.itemId && Number(r.boxes) > 0),
+      issuingWarehouseId
     });
     onClose();
   }
@@ -1939,6 +2046,56 @@ function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [],
           }) })
         ] })
       ] }),
+      /* @__PURE__ */ jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [
+        /* @__PURE__ */ jsxs("div", { className: "mb-2 flex items-center justify-between", children: [
+          /* @__PURE__ */ jsx("p", { className: "text-xs font-semibold uppercase text-slate-400", children: "Barcode rolls (optional)" }),
+          /* @__PURE__ */ jsxs(Btn, { type: "button", className: "py-1 px-2 text-xs", onClick: addBarcodeRow, children: [
+            /* @__PURE__ */ jsx(Plus, { size: 13 }),
+            " Add roll"
+          ] })
+        ] }),
+        barcodeRows.length === 0 ? /* @__PURE__ */ jsx("p", { className: "text-xs text-slate-400", children: "No barcode rolls added. Only the serial/series number is recorded for these." }) : /* @__PURE__ */ jsx("div", { className: "flex flex-col gap-2", children: barcodeRows.map((row, idx) => /* @__PURE__ */ jsxs("div", { className: "grid grid-cols-1 sm:grid-cols-[2fr_1fr_1fr_1fr_auto] gap-2 items-center", children: [
+          /* @__PURE__ */ jsx(TextInput, { placeholder: "Serial / series number", value: row.serialNumber, onChange: (e) => updateBarcodeRow(idx, { serialNumber: e.target.value }) }),
+          /* @__PURE__ */ jsx(TextInput, { placeholder: "Counter", value: row.counter, onChange: (e) => updateBarcodeRow(idx, { counter: e.target.value }) }),
+          /* @__PURE__ */ jsx(TextInput, { type: "date", value: row.date, onChange: (e) => updateBarcodeRow(idx, { date: e.target.value }) }),
+          /* @__PURE__ */ jsx(TextInput, { placeholder: "Status", value: row.status, onChange: (e) => updateBarcodeRow(idx, { status: e.target.value }) }),
+          /* @__PURE__ */ jsx("button", { type: "button", onClick: () => removeBarcodeRow(idx), className: "justify-self-start rounded p-1.5 text-slate-400 hover:bg-red-100 hover:text-red-600", children: /* @__PURE__ */ jsx(Trash2, { size: 14 }) })
+        ] }, idx)) })
+      ] }),
+      /* @__PURE__ */ jsxs("div", { className: "rounded-md border border-slate-200 p-3", children: [
+        /* @__PURE__ */ jsxs("div", { className: "mb-2 flex items-center justify-between", children: [
+          /* @__PURE__ */ jsx("p", { className: "text-xs font-semibold uppercase text-slate-400", children: "RDT kit boxes (optional, 30 kits per box)" }),
+          /* @__PURE__ */ jsxs(Btn, { type: "button", className: "py-1 px-2 text-xs", disabled: kitItemOptions.length === 0, onClick: addKitRow, children: [
+            /* @__PURE__ */ jsx(Plus, { size: 13 }),
+            " Add box line"
+          ] })
+        ] }),
+        kitItemOptions.length === 0 ? /* @__PURE__ */ jsx("p", { className: "text-xs text-amber-600", children: 'No RDT Kit item exists yet in Inventory Items. Add one there first (category "RDT Kits") to hand out boxes here.' }) : /* @__PURE__ */ jsxs(Fragment2, { children: [
+          /* @__PURE__ */ jsx(Field, { label: "Issuing warehouse", className: "mb-2", children: /* @__PURE__ */ jsx(Select, { value: issuingWarehouseId, onChange: (e) => setIssuingWarehouseId(e.target.value), children: hospitals.map((h) => /* @__PURE__ */ jsx("option", { value: h.id, children: h.name }, h.id)) }) }),
+          kitRows.length === 0 ? /* @__PURE__ */ jsx("p", { className: "text-xs text-slate-400", children: "No RDT kit boxes added yet." }) : /* @__PURE__ */ jsx("div", { className: "flex flex-col gap-2", children: kitRows.map((row, idx) => {
+            const stock = stockAt(row.itemId, issuingWarehouseId);
+            return /* @__PURE__ */ jsxs("div", { className: "rounded-md bg-slate-50 p-2.5", children: [
+              /* @__PURE__ */ jsxs("div", { className: "grid grid-cols-1 sm:grid-cols-[2fr_1fr_auto] gap-2 items-center", children: [
+                /* @__PURE__ */ jsx(Select, { value: row.itemId, onChange: (e) => updateKitRow(idx, { itemId: e.target.value }), children: kitItemOptions.map((it) => /* @__PURE__ */ jsx("option", { value: it.id, children: it.name }, it.id)) }),
+                /* @__PURE__ */ jsx(TextInput, { type: "number", min: 1, placeholder: "Boxes", value: row.boxes, onChange: (e) => updateKitRow(idx, { boxes: Number(e.target.value) }) }),
+                /* @__PURE__ */ jsx("button", { type: "button", onClick: () => removeKitRow(idx), className: "justify-self-start rounded p-1.5 text-slate-400 hover:bg-red-100 hover:text-red-600", children: /* @__PURE__ */ jsx(Trash2, { size: 14 }) })
+              ] }),
+              /* @__PURE__ */ jsxs("p", { className: "mt-1 text-xs text-slate-400", children: [
+                "Available at issuing warehouse: ",
+                stock,
+                " box",
+                stock === 1 ? "" : "es",
+                Number(row.boxes) > stock ? " - not enough stock" : ""
+              ] }),
+              /* @__PURE__ */ jsxs("div", { className: "mt-2 grid grid-cols-3 gap-2", children: [
+                /* @__PURE__ */ jsx(TextInput, { placeholder: "Counter", value: row.counter, onChange: (e) => updateKitRow(idx, { counter: e.target.value }) }),
+                /* @__PURE__ */ jsx(TextInput, { type: "date", value: row.date, onChange: (e) => updateKitRow(idx, { date: e.target.value }) }),
+                /* @__PURE__ */ jsx(TextInput, { placeholder: "Status", value: row.status, onChange: (e) => updateKitRow(idx, { status: e.target.value }) })
+              ] })
+            ] }, idx);
+          }) })
+        ] })
+      ] }),
       /* @__PURE__ */ jsxs("div", { className: "flex justify-end gap-2", children: [
         /* @__PURE__ */ jsx(Btn, { onClick: onClose, children: "Cancel" }),
         /* @__PURE__ */ jsxs(Btn, { variant: "primary", disabled: !canPreview, onClick: () => setStep("preview"), children: [
@@ -1978,11 +2135,11 @@ function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [],
             /* @__PURE__ */ jsx("b", { children: handingOverDesignation })
           ] }),
           " (Hep-C Elimination Program) is hereby handing over ",
-          numWord(rows.length),
+          numWord(totalHandoverCount),
           " (",
-          pad2(rows.length),
-          ") Android Tablet Device",
-          rows.length > 1 ? "s" : "",
+          pad2(totalHandoverCount),
+          ") ",
+          typesText,
           " to ",
           /* @__PURE__ */ jsx("b", { children: takenOverName }),
           " with following details: -"
@@ -1996,23 +2153,26 @@ function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [],
             /* @__PURE__ */ jsx("th", { className: "border border-slate-800 p-1.5", children: "Handing over Date" }),
             /* @__PURE__ */ jsx("th", { className: "border border-slate-800 p-1.5", children: "Status" })
           ] }) }),
-          /* @__PURE__ */ jsx("tbody", { children: rows.map((r, i) => {
-            const t = tablets.find((x) => x.id === r.tabletId);
-            return /* @__PURE__ */ jsxs("tr", { children: [
-              /* @__PURE__ */ jsxs("td", { className: "border border-slate-800 p-1.5 text-center", children: [
-                i + 1,
-                "."
-              ] }),
-              /* @__PURE__ */ jsx("td", { className: "border border-slate-800 p-1.5", children: "IVAS Tablet" }),
-              /* @__PURE__ */ jsx("td", { className: "border border-slate-800 p-1.5", children: t?.serialNumber }),
-              /* @__PURE__ */ jsx("td", { className: "border border-slate-800 p-1.5", children: r.counter }),
-              /* @__PURE__ */ jsx("td", { className: "border border-slate-800 p-1.5 text-center", children: fmtDate(r.date) }),
-              /* @__PURE__ */ jsx("td", { className: "border border-slate-800 p-1.5", children: r.status })
-            ] }, r.tabletId);
-          }) })
+          /* @__PURE__ */ jsx("tbody", { children: combineHandoverRows({
+            rows,
+            tablets,
+            barcodeRows: barcodeRows.filter((r) => r.serialNumber.trim()),
+            kitRows: kitRows.filter((r) => r.itemId && Number(r.boxes) > 0),
+            items
+          }).map((r, i) => /* @__PURE__ */ jsxs("tr", { children: [
+            /* @__PURE__ */ jsxs("td", { className: "border border-slate-800 p-1.5 text-center", children: [
+              i + 1,
+              "."
+            ] }),
+            /* @__PURE__ */ jsx("td", { className: "border border-slate-800 p-1.5", children: r.description }),
+            /* @__PURE__ */ jsx("td", { className: "border border-slate-800 p-1.5", children: r.serial }),
+            /* @__PURE__ */ jsx("td", { className: "border border-slate-800 p-1.5", children: r.counter }),
+            /* @__PURE__ */ jsx("td", { className: "border border-slate-800 p-1.5 text-center", children: fmtDate(r.date) }),
+            /* @__PURE__ */ jsx("td", { className: "border border-slate-800 p-1.5", children: r.status })
+          ] }, i)) })
         ] }),
         /* @__PURE__ */ jsxs("p", { className: "mt-3", children: [
-          "The tablet device shall be utilized exclusively for data entry of citizens/individuals related to Hepatitis C screening, testing, and treatment",
+          "The above item(s) shall be utilized exclusively for data entry, screening and related activities under the Hepatitis C Elimination Program",
           focalPerson ? /* @__PURE__ */ jsxs(Fragment2, { children: [
             " under the supervision of focal person ",
             /* @__PURE__ */ jsx("b", { children: focalPerson })
@@ -2072,7 +2232,7 @@ function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [],
             Btn,
             {
               onClick: () => downloadLetterWord(
-                buildLetterHTML({ refNo, letterDate, hospitalName: hospital?.name || "", hospitalLocation: hospital?.location || "", handingOverName, handingOverDesignation, takenOverName, takenOverDesignation, takenOverContact, focalPerson, rows, tablets }),
+                buildLetterHTML({ refNo, letterDate, hospitalName: hospital?.name || "", hospitalLocation: hospital?.location || "", handingOverName, handingOverDesignation, takenOverName, takenOverDesignation, takenOverContact, focalPerson, rows, tablets, barcodeRows: barcodeRows.filter((r) => r.serialNumber.trim()), kitRows: kitRows.filter((r) => r.itemId && Number(r.boxes) > 0), items }),
                 `Handover-Letter-${(refNo || todayISO()).replace(/[^\w-]+/g, "_")}.doc`
               ),
               children: [
@@ -2085,7 +2245,7 @@ function HandoverLetterModal({ tablets, hospitals, staff, handoverOfficers = [],
             Btn,
             {
               onClick: () => downloadLetterHTML(
-                buildLetterHTML({ refNo, letterDate, hospitalName: hospital?.name || "", hospitalLocation: hospital?.location || "", handingOverName, handingOverDesignation, takenOverName, takenOverDesignation, takenOverContact, focalPerson, rows, tablets }),
+                buildLetterHTML({ refNo, letterDate, hospitalName: hospital?.name || "", hospitalLocation: hospital?.location || "", handingOverName, handingOverDesignation, takenOverName, takenOverDesignation, takenOverContact, focalPerson, rows, tablets, barcodeRows: barcodeRows.filter((r) => r.serialNumber.trim()), kitRows: kitRows.filter((r) => r.itemId && Number(r.boxes) > 0), items }),
                 `Handover-Letter-${(refNo || todayISO()).replace(/[^\w-]+/g, "_")}.html`
               ),
               children: [
